@@ -24,6 +24,43 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type TaskPhase int
+
+const (
+	MapPhase    TaskPhase = 0
+	ReducePhase TaskPhase = 1
+	DonePhase   TaskPhase = 2
+)
+
+type TaskType int
+
+const (
+	MapTask    TaskType = 0
+	ReduceTask TaskType = 1
+	DoneTask   TaskType = 2
+	WaitTask   TaskType = 3
+)
+
+type TaskStat int
+
+const (
+	ReadyStat   TaskStat = 0
+	RunningStat TaskStat = 1
+	FinishStat  TaskStat = 2
+	ErrorStat   TaskStat = 3
+)
+
+type Task struct {
+	Id        int      `json:"id"`
+	Type      TaskType `json:"type"`
+	Stat      TaskStat `json:"stat"`
+	ReduceNum int      `json:"reduce_num"`
+	Files     []string `json:"files"`
+}
+
+func reduceTmpFileName(mapId, reduceId int) string {
+	return "mr-tmp-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(reduceId)
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
