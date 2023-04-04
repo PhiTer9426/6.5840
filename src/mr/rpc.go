@@ -6,7 +6,10 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+	"time"
+)
 import "strconv"
 
 //
@@ -23,6 +26,8 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+
+const TIME_OUT = 120 * time.Second
 
 type TaskPhase int
 
@@ -51,15 +56,21 @@ const (
 )
 
 type Task struct {
-	Id        int      `json:"id"`
-	Type      TaskType `json:"type"`
-	Stat      TaskStat `json:"stat"`
+	Id       int      `json:"id"`
+	Type     TaskType `json:"type"`
+	Stat     TaskStat `json:"stat"`
+	Deadline int64    `json:"deadline"`
+
 	ReduceNum int      `json:"reduce_num"`
 	Files     []string `json:"files"`
 }
 
 func reduceTmpFileName(mapId, reduceId int) string {
 	return "mr-tmp-" + strconv.Itoa(mapId) + "-" + strconv.Itoa(reduceId)
+}
+
+func reduceOutFileName(reduceId int) string {
+	return "mr-out-" + strconv.Itoa(reduceId)
 }
 
 // Cook up a unique-ish UNIX-domain socket name

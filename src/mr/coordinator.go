@@ -2,14 +2,22 @@ package mr
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
+
+const Debug = false
+
+func DebugPrintf(format string, a ...interface{}) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+}
 
 type Coordinator struct {
 	// Your definitions here.
@@ -17,7 +25,7 @@ type Coordinator struct {
 	files     []string
 	taskId    int
 	phase     TaskPhase
-	taskStats map[int]*Task
+	taskSet   map[int]*Task
 	taskQueue chan int
 	mu        sync.Mutex
 }
@@ -30,7 +38,7 @@ func (c *Coordinator) initMapTasks() {
 		c.generateMapTask(c.taskId, file)
 		c.taskId++
 	}
-	fmt.Printf("Coordinator Init %v Map tasks\n", len(c.taskQueue))
+	DebugPrintf("Coordinator Init %v Map tasks\n", len(c.taskQueue))
 }
 
 func (c *Coordinator) generateMapTask(taskId int, file string) {
@@ -38,12 +46,13 @@ func (c *Coordinator) generateMapTask(taskId int, file string) {
 		Id:        taskId,
 		Type:      MapTask,
 		Stat:      ReadyStat,
+		Deadline:  -1,
 		ReduceNum: c.nReduce,
 		Files:     []string{file},
 	}
 	c.taskQueue <- task.Id
-	c.taskStats[taskId] = &task
-	fmt.Printf("Coordinator generate Map task : %v\n", task)
+	c.taskSet[taskId] = &task
+	DebugPrintf("Coordinator generate Map task : %v\n", task)
 }
 
 func (c *Coordinator) initReduceTasks() {
@@ -54,7 +63,7 @@ func (c *Coordinator) initReduceTasks() {
 		c.generateReduceTask(c.taskId, i)
 		c.taskId++
 	}
-	fmt.Printf("Coordinator Init %v Reduce tasks\n", c.nReduce)
+	DebugPrintf("Coordinator Init %v Reduce tasks\n", c.nReduce)
 }
 
 func (c *Coordinator) generateReduceTask(taskId int, reduceId int) {
@@ -62,6 +71,7 @@ func (c *Coordinator) generateReduceTask(taskId int, reduceId int) {
 		Id:        taskId,
 		Type:      ReduceTask,
 		Stat:      ReadyStat,
+		Deadline:  -1,
 		ReduceNum: c.nReduce,
 		Files:     []string{},
 	}
@@ -69,8 +79,8 @@ func (c *Coordinator) generateReduceTask(taskId int, reduceId int) {
 		task.Files = append(task.Files, reduceTmpFileName(mapId, reduceId))
 	}
 	c.taskQueue <- task.Id
-	c.taskStats[taskId] = &task
-	fmt.Printf("Coordinator generate Reduce task : %v\n", task)
+	c.taskSet[taskId] = &task
+	DebugPrintf("Coordinator generate Reduce task : %v\n", task)
 }
 
 func (c *Coordinator) schedule() {
@@ -79,8 +89,31 @@ func (c *Coordinator) schedule() {
 		return
 	}
 
+	c.refreshTimeoutTask()
+
+	allDone := c.isAllDone()
+
+	DebugPrintf("Coordinator schedule: Phase:%v, allDone:%v\n", c.phase, allDone)
+
+	if allDone {
+		c.nextPhase()
+	}
+}
+
+func (c *Coordinator) refreshTimeoutTask() {
+	for _, task := range c.taskSet {
+		if task.Stat == RunningStat && task.Deadline != -1 && time.Now().Unix() > task.Deadline {
+			// timeout
+			task.Deadline = -1
+			task.Stat = ReadyStat
+			c.taskQueue <- task.Id
+		}
+	}
+}
+
+func (c *Coordinator) isAllDone() bool {
 	allDone := true
-	for _, task := range c.taskStats {
+	for _, task := range c.taskSet {
 		switch task.Stat {
 		case ReadyStat:
 			allDone = false
@@ -94,16 +127,15 @@ func (c *Coordinator) schedule() {
 		default:
 		}
 	}
+	return allDone
+}
 
-	fmt.Printf("Coordinator schedule: Phase:%v, allDone:%v\n", c.phase, allDone)
-
-	if allDone {
-		if c.phase == MapPhase {
-			c.phase = ReducePhase
-			c.initReduceTasks()
-		} else if c.phase == ReducePhase {
-			c.phase = DonePhase
-		}
+func (c *Coordinator) nextPhase() {
+	if c.phase == MapPhase {
+		c.phase = ReducePhase
+		c.initReduceTasks()
+	} else if c.phase == ReducePhase {
+		c.phase = DonePhase
 	}
 }
 
@@ -114,6 +146,7 @@ func (c *Coordinator) schedule() {
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
+
 func (c *Coordinator) GetTask(args *ExampleArgs, reply *[]byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -122,7 +155,8 @@ func (c *Coordinator) GetTask(args *ExampleArgs, reply *[]byte) error {
 
 	if len(c.taskQueue) > 0 {
 		taskId := <-c.taskQueue
-		task = c.taskStats[taskId]
+		task = c.taskSet[taskId]
+		task.Deadline = time.Now().Add(TIME_OUT).Unix()
 		task.Stat = RunningStat
 
 	} else if c.phase == DonePhase {
@@ -142,10 +176,10 @@ func (c *Coordinator) GetTask(args *ExampleArgs, reply *[]byte) error {
 
 	data, err := json.Marshal(task)
 	if err != nil {
-		fmt.Printf("Coordinator GetTask Marshal err: %v\n", err)
+		DebugPrintf("Coordinator GetTask Marshal err: %v\n", err)
 		return err
 	} else {
-		fmt.Printf("Coordinator GetTask: %v\n", string(data))
+		DebugPrintf("Coordinator GetTask: %v\n", string(data))
 	}
 
 	*reply = data
@@ -157,7 +191,7 @@ func (c *Coordinator) ReportTask(args *Task, reply *ExampleReply) error {
 	defer c.mu.Unlock()
 
 	if args.Type == MapTask || args.Type == ReduceTask {
-		c.taskStats[args.Id].Stat = args.Stat
+		c.taskSet[args.Id].Stat = args.Stat
 	}
 
 	go c.schedule()
@@ -185,7 +219,7 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-//
+// Done
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 //
@@ -194,7 +228,7 @@ func (c *Coordinator) Done() bool {
 	return c.phase == DonePhase
 }
 
-//
+// MakeCoordinator
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
@@ -206,7 +240,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		files:     files,
 		taskId:    0,
 		phase:     MapPhase,
-		taskStats: map[int]*Task{},
+		taskSet:   map[int]*Task{},
 		taskQueue: make(chan int, max(len(files), nReduce)),
 		mu:        sync.Mutex{},
 	}

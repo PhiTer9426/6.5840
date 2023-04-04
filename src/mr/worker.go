@@ -48,12 +48,12 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		case ReduceTask:
 			doReduceTask(reducef, &task)
 		case WaitTask:
-			fmt.Printf("Worker: wait 3 second\n")
+			DebugPrintf("Worker: wait 3 second\n")
 			time.Sleep(time.Second * 3)
 			task.Stat = FinishStat
 			reportTask(&task)
 		case DoneTask:
-			fmt.Printf("Worker: will be closed\n")
+			DebugPrintf("Worker: will be closed\n")
 			task.Stat = FinishStat
 			reportTask(&task)
 			return
@@ -126,9 +126,9 @@ func doReduceTask(reducef func(string, []string) string, task *Task) {
 
 	reducerId := task.Id
 	intermediate := merge(task.Files)
-	dir, _ := os.Getwd()
 
-	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	filename := reduceOutFileName(reducerId)
+	file, err := os.Create(filename)
 	if err != nil {
 		task.Stat = ErrorStat
 		reportTask(task)
@@ -137,7 +137,7 @@ func doReduceTask(reducef func(string, []string) string, task *Task) {
 
 	values := map[string][]string{}
 	for i := 0; i < len(intermediate); i++ {
-		values[intermediate[i].Key] = append(values[intermediate[i].Key], "1")
+		values[intermediate[i].Key] = append(values[intermediate[i].Key], intermediate[i].Value)
 	}
 
 	keys := make([]string, 0)
@@ -148,7 +148,7 @@ func doReduceTask(reducef func(string, []string) string, task *Task) {
 
 	for _, key := range keys {
 		cnt := reducef(key, values[key])
-		_, err := fmt.Fprintf(tempFile, "%v %v\n", key, cnt)
+		_, err := fmt.Fprintf(file, "%v %v\n", key, cnt)
 		if err != nil {
 			task.Stat = ErrorStat
 			reportTask(task)
@@ -156,10 +156,13 @@ func doReduceTask(reducef func(string, []string) string, task *Task) {
 		}
 	}
 
-	tempFile.Close()
-	os.Rename(tempFile.Name(), fmt.Sprintf("mr-out-%d", reducerId))
+	file.Close()
 	task.Stat = FinishStat
 	reportTask(task)
+
+	for _, tmpFile := range task.Files {
+		os.Remove(tmpFile)
+	}
 }
 
 func merge(files []string) []KeyValue {
@@ -187,16 +190,16 @@ func merge(files []string) []KeyValue {
 
 func getTask() (Task, error) {
 
-	fmt.Printf("Worker try get a task\n")
+	DebugPrintf("Worker try get a task\n")
 	reply := []byte{}
 	args := ExampleArgs{}
 	ok := call("Coordinator.GetTask", &args, &reply)
 
 	//wMu.Unlock()
 	if ok {
-		fmt.Printf("Worker getTask: %v\n", string(reply))
+		DebugPrintf("Worker getTask: %v\n", string(reply))
 	} else {
-		fmt.Printf("call failed!\n")
+		DebugPrintf("call failed!\n")
 	}
 
 	task := Task{}
@@ -212,9 +215,9 @@ func reportTask(task *Task) {
 	ok := call("Coordinator.ReportTask", &task, &reply)
 	//wMu.Unlock()
 	if ok {
-		fmt.Printf("Worker reportTask: Type:%v, Id:%v, Stat:%v\n", task.Type, task.Id, task.Stat)
+		DebugPrintf("Worker reportTask: Type:%v, Id:%v, Stat:%v\n", task.Type, task.Id, task.Stat)
 	} else {
-		fmt.Printf("call failed!\n")
+		DebugPrintf("call failed!\n")
 	}
 }
 
@@ -236,9 +239,9 @@ func CallExample() {
 	ok := call("Coordinator.Example", &args, &reply)
 	if ok {
 		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
+		DebugPrintf("reply.Y %v\n", reply.Y)
 	} else {
-		fmt.Printf("call failed!\n")
+		DebugPrintf("call failed!\n")
 	}
 }
 
